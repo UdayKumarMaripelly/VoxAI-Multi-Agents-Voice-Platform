@@ -37,7 +37,7 @@ function Feedback() {
       <h2 className='font-bold text-xl'>Feedback</h2>
       {discussionRoomList?.length==0&&<h2 className='text-gray-400'>You don't have any previous feedback</h2>}
       <div className='mt-5'>
-        {discussionRoomList.map((item, index)=> (item.coachingOption=='Mock Interview'||item.coachingOption=='Ques Ans Prep')&&
+        {discussionRoomList.map((item, index)=> (item.coachingOption=='Mock Interview'||item.coachingOption=='Ques Ans Prep'||item.coachingOption=='Medical Assistant')&&
           (
             <div key={index} className='border-b-[1px] pb-3 mb-4 group flex justify-between items-center cursor-pointer'>
               <div className='flex gap-7 items-center'>

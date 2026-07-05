@@ -1,330 +1,328 @@
 "use client";
 
-import { Button } from '@/components/ui/button';
-import { api } from '@/convex/_generated/api';
-import { AIModel, ConvertTextToSpeech, getToken } from '@/services/GlobalServices';
-import { CoachingExpert } from '@/services/Options';
-import { UserButton } from '@stackframe/stack';
-import { RealtimeTranscriber } from 'assemblyai';
-import { useMutation, useQuery } from 'convex/react';
-import { Loader2Icon } from 'lucide-react';
-import dynamic from 'next/dynamic';
-import Image from 'next/image';
-import { useParams } from 'next/navigation';
-import React, { useContext, useEffect, useRef, useState, useCallback } from 'react';
-import ChatBox from './_components/ChatBox';
-import { toast } from 'sonner';
-import { UserContext } from '@/app/_context/UserContext';
+import { Button } from "@/components/ui/button";
+import { api } from "@/convex/_generated/api";
+import { AIModel, ConvertTextToSpeech } from "@/services/GlobalServices";
+import { CoachingExpert } from "@/services/Options";
+import { useMutation, useQuery } from "convex/react";
+import {
+  Loader2Icon,
+  Mic,
+  MicOff,
+  Video,
+  VideoOff,
+} from "lucide-react";
+import Image from "next/image";
+import { useParams } from "next/navigation";
+import React, { useContext, useEffect, useRef, useState } from "react";
+import ChatBox from "./_components/ChatBox";
+import { toast } from "sonner";
+import { UserContext } from "@/app/_context/UserContext";
 
-// No need for top-level dynamic import of RecordRTC
-// We'll dynamically import it inside connectToServer
-
-function DiscussionRoom() {
+export default function DiscussionRoom() {
   const { roomid } = useParams();
-  const { userData, setUserData } = useContext(UserContext);
+  const { userData } = useContext(UserContext);
 
-  // Initialize DiscussionRoomData safely
-  const DiscussionRoomData = useQuery(api.DiscussionRoom.GetDiscussionRoom, { id: roomid });
+  const room = useQuery(api.DiscussionRoom.GetDiscussionRoom, { id: roomid });
+  const saveConversation = useMutation(api.DiscussionRoom.UpdateConversation);
 
-  // States
+  // 🔑 AUDIO REFS
+  const socketRef = useRef(null);
+  const audioContextRef = useRef(null);
+  const processorRef = useRef(null);
+  const mediaStreamRef = useRef(null);
+
+  // 🎥 VIDEO REFS
+  const videoRef = useRef(null);
+  const videoStreamRef = useRef(null);
+
   const [expert, setExpert] = useState(null);
-  const [enableMic, setEnableMic] = useState(false);
-  const [transcribe, setTranscribe] = useState('');
   const [conversation, setConversation] = useState([]);
+  const [transcript, setTranscript] = useState("");
+  const [audioUrl, setAudioUrl] = useState("");
   const [loading, setLoading] = useState(false);
-  const [audioUrl, setAudioUrl] = useState('');
+  const [micOn, setMicOn] = useState(false);
+  const [cameraOn, setCameraOn] = useState(false);
   const [enableFeedbackNotes, setEnableFeedbackNotes] = useState(false);
 
-  // Refs
-  const recorder = useRef(null);
-  const realtimeTranscriber = useRef(null);
-  const stream = useRef(null);
+  // 🔐 AssemblyAI token
+  const getAssemblyToken = async () => {
+    const res = await fetch("/api/assembly-token");
+    const data = await res.json();
+    return data.token;
+  };
 
-  // Convex mutations
-  const UpdateConversation = useMutation(api.DiscussionRoom.UpdateConversation);
-  const updateUserToken = useMutation(api.users.updateUserToken);
-
-  // Other refs
-  const silenceTimeout = useRef(null);
-  const texts = useRef({});
-
-  // Set expert based on DiscussionRoomData
   useEffect(() => {
-    if (DiscussionRoomData) {
-      const Expert = CoachingExpert.find(item => item.name === DiscussionRoomData?.expertName);
-      setExpert(Expert || null);
+    if (room) {
+      setExpert(
+        CoachingExpert.find((e) => e.name === room.expertName) || null
+      );
     }
-  }, [DiscussionRoomData]);
+  }, [room]);
 
-  // Function to update user token
-  const updateUserTokenMethod = useCallback(
-    async (text) => {
-      const tokenCount = text.trim() ? text.trim().split(/\s+/).length : 0;
-      if (!userData?._id) return;
+  // 🎤 CONNECT MIC
+  const connect = async () => {
+    setLoading(true);
+    try {
+      const token = await getAssemblyToken();
+      const ws = new WebSocket(
+        `wss://streaming.assemblyai.com/v3/ws?sample_rate=16000&token=${token}`
+      );
 
-      try {
-        await updateUserToken({
-          id: userData._id,
-          credits: Number(userData.credits) - tokenCount
-        });
+      socketRef.current = ws;
 
-        setUserData(prev => ({
-          ...prev,
-          credits: Number(userData.credits) - tokenCount
-        }));
-      } catch (err) {
-        console.error("Failed to update user token:", err);
-      }
-    },
-    [userData, updateUserToken, setUserData]
-  );
-
-  // Connect to AssemblyAI + record audio
-const connectToServer = async () => {
-  setLoading(true);
-
+      ws.onopen = () => {
+        toast.success("🎤 Listening...");
+        setMicOn(true);
+      };
+      
+      const generateFeedback = async () => {
   try {
-    // 1️⃣ Get your AssemblyAI token
-    const { token } = await getToken();
-    if (!token) throw new Error("Failed to get AssemblyAI token");
-    console.log("Token received:", token);
-
-    // 2️⃣ Open WebSocket connection to Universal Streaming API
-    const wsUrl = `wss://api.assemblyai.com/v2/realtime/ws?sample_rate=16000`;
-    const socket = new WebSocket(wsUrl, [], {
-      headers: {
-        Authorization: token,
-      },
+    const res = await fetch("/api/generate-feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        coachingOption: room.coachingOption,
+        conversation,
+      }),
     });
 
-    // Save WebSocket reference
-    realtimeTranscriber.current = socket;
+    const data = await res.json();
 
-    // 3️⃣ Event: connection opened
-    socket.onopen = () => {
-      console.log("Connected to AssemblyAI Universal Streaming API");
-      toast.success("Connected to server");
-      setEnableMic(true);
-    };
+    if (!res.ok) throw new Error(data.error);
 
-    // 4️⃣ Event: messages from server
-    socket.onmessage = (msgEvent) => {
-      try {
-        const data = JSON.parse(msgEvent.data);
-
-        if (data.message_type === "FinalTranscript") {
-          const transcriptText = data.text;
-          setConversation((prev) => [...prev, { role: "user", content: transcriptText }]);
-          updateUserTokenMethod(transcriptText);
-        }
-
-        // Combine partial transcripts
-        if (data.text) {
-          texts.current[data.audio_start] = data.text;
-          const sortedKeys = Object.keys(texts.current).sort((a, b) => a - b);
-          let combined = "";
-          for (const key of sortedKeys) {
-            combined += texts.current[key] || "";
-          }
-          setTranscribe(combined);
-        }
-      } catch (err) {
-        console.error("Error parsing WS message:", err);
-      }
-    };
-
-    // 5️⃣ Event: errors
-    socket.onerror = (err) => {
-      console.error("WebSocket error:", err);
-      toast.error("WebSocket error, check console.");
-      setEnableMic(false);
-    };
-
-    // 6️⃣ Event: closed
-    socket.onclose = (event) => {
-      console.log("WebSocket closed:", event);
-      setEnableMic(false);
-    };
-
-    // 7️⃣ Get microphone access and stream audio
-    const mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    stream.current = mediaStream;
-
-    // Dynamically import RecordRTC
-    const RecordRTCModule = await import("recordrtc");
-    const RecordRTC = RecordRTCModule.default;
-
-    recorder.current = new RecordRTC(mediaStream, {
-      type: "audio",
-      mimeType: "audio/webm;codecs=pcm",
-      recorderType: RecordRTC.StereoAudioRecorder,
-      timeSlice: 250,
-      desiredSampRate: 16000,
-      numberOfAudioChannels: 1,
-      bufferSize: 4096,
-      audioBitsPerSecond: 128000,
-      ondataavailable: async (blob) => {
-        if (!realtimeTranscriber.current || realtimeTranscriber.current.readyState !== WebSocket.OPEN)
-          return;
-
-        const buffer = await blob.arrayBuffer();
-
-        // Send audio as base64 per AssemblyAI's spec
-        const base64Chunk = arrayBufferToBase64(buffer);
-        realtimeTranscriber.current.send(JSON.stringify({ audio_data: base64Chunk }));
-      },
-    });
-
-    recorder.current.startRecording();
+    toast.success("Feedback generated successfully");
+    console.log("FEEDBACK:", data.result);
   } catch (err) {
-    console.error("Connect error:", err);
-    toast.error("Failed to connect. Check console.");
-
-    if (stream.current) {
-      stream.current.getTracks().forEach((track) => track.stop());
-      stream.current = null;
-    }
-
-    recorder.current = null;
-    realtimeTranscriber.current = null;
-    setEnableMic(false);
-  } finally {
-    setLoading(false);
+    console.error(err);
+    toast.error("Internal server error, Try again!");
   }
 };
 
-// Helper: convert ArrayBuffer to Base64 string
-function arrayBufferToBase64(buffer) {
-  let binary = "";
-  const bytes = new Uint8Array(buffer);
-  const len = bytes.byteLength;
-  for (let i = 0; i < len; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
-}
 
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
 
+        if (data.transcript) setTranscript(data.transcript);
 
-  // Cleanup function
-  const cleanupResources = () => {
-    if (stream.current) {
-      stream.current.getTracks().forEach(track => track.stop());
-      stream.current = null;
-    }
-    recorder.current = null;
-    realtimeTranscriber.current = null;
-    setEnableMic(false);
-  };
+        if (data.end_of_turn && data.transcript) {
+          setTranscript("");
+          setConversation((p) => [
+            ...p,
+            { role: "user", content: data.transcript },
+          ]);
+        }
+      };
 
-  // Disconnect
-  const disconnect = async (e) => {
-    e.preventDefault();
-    setLoading(true);
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
 
-    try {
-      if (realtimeTranscriber.current) await realtimeTranscriber.current.close();
-      if (recorder.current) {
-        recorder.current.stopRecording(() => cleanupResources());
-      } else {
-        cleanupResources();
-      }
+      const audioContext = new AudioContext({ sampleRate: 16000 });
+      audioContextRef.current = audioContext;
 
-      setEnableMic(false);
-      toast('Disconnected!');
-      await UpdateConversation({
-        id: DiscussionRoomData?._id,
-        conversation
-      });
+      const source = audioContext.createMediaStreamSource(stream);
+      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      processorRef.current = processor;
+
+      source.connect(processor);
+      processor.connect(audioContext.destination);
+
+      processor.onaudioprocess = (e) => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+
+        const input = e.inputBuffer.getChannelData(0);
+        const pcm16 = new Int16Array(input.length);
+
+        for (let i = 0; i < input.length; i++) {
+          pcm16[i] = Math.max(-1, Math.min(1, input[i])) * 0x7fff;
+        }
+
+        ws.send(pcm16.buffer);
+      };
     } catch (err) {
-      console.error("Error during disconnect:", err);
+      console.error(err);
+      toast.error("Microphone error");
     } finally {
       setLoading(false);
-      setEnableFeedbackNotes(true);
-      if (silenceTimeout.current) clearTimeout(silenceTimeout.current);
     }
   };
 
-  // Fetch AI response on conversation change
+  // 🛑 DISCONNECT MIC
+const disconnect = async () => {
+  processorRef.current?.disconnect();
+  audioContextRef.current?.close();
+  mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
+  socketRef.current?.close();
+
+  setMicOn(false);
+
+  // ✅ filter meaningful conversation
+  const meaningfulConversation = conversation.filter(
+    (c) => c?.role && c?.content && c.content.trim() !== ""
+  );
+
+  if (meaningfulConversation.length >= 2) {
+    setEnableFeedbackNotes(true);
+
+    await saveConversation({
+      id: room._id,
+      conversation: meaningfulConversation,
+    });
+  } else {
+    toast.error("Not enough conversation to generate feedback");
+  }
+
+  toast.success("Disconnected");
+};
+
+
+  // 🎥 TOGGLE CAMERA
+  const toggleCamera = async () => {
+  if (!cameraOn) {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    videoStreamRef.current = stream;
+
+    // 🔴 FIX: wait until video element exists
+    if (videoRef.current) {
+      videoRef.current.srcObject = stream;
+    }
+
+    setCameraOn(true);
+  } else {
+    videoStreamRef.current?.getTracks().forEach((t) => t.stop());
+    videoStreamRef.current = null;
+    setCameraOn(false);
+  }
+};
+
+
+  // 🤖 AI RESPONSE
   useEffect(() => {
-    const fetchAIResponse = async () => {
-      if (!conversation.length) return;
-      if (conversation[conversation.length - 1].role !== 'user') return;
+  const runAI = async () => {
+    if (!conversation.length) return;
 
-      const lastTwoMsg = conversation.slice(-8);
-      try {
-        const aiResp = await AIModel(
-          DiscussionRoomData?.topic,
-          DiscussionRoomData?.coachingOption,
-          lastTwoMsg
-        );
+    const last = conversation[conversation.length - 1];
+    if (last.role !== "user") return;
 
-        const url = await ConvertTextToSpeech(aiResp.content, DiscussionRoomData?.expertName);
-        setAudioUrl(url);
-        setConversation(prev => [...prev, aiResp]);
-        await updateUserTokenMethod(aiResp.content);
-      } catch (err) {
-        console.error("AI fetch error:", err);
-      }
-    };
+    try {
+      const ai = await AIModel(
+        room.topic,
+        room.coachingOption,
+        conversation.slice(-8)
+      );
 
-    const timeout = setTimeout(fetchAIResponse, 500);
-    return () => clearTimeout(timeout);
-  }, [conversation, DiscussionRoomData, updateUserTokenMethod]);
+      if (!ai || !ai.content) return;
 
-  // Render
-  if (!DiscussionRoomData) return <p>Loading room data...</p>;
+      const url = await ConvertTextToSpeech(ai.content, room.expertName);
+      setAudioUrl(url);
+
+      setConversation((prev) => [
+        ...prev,
+        { role: "assistant", content: ai.content },
+      ]);
+    } catch (err) {
+      console.error("AI response error:", err);
+    }
+  };
+
+  const t = setTimeout(runAI, 600);
+  return () => clearTimeout(t);
+}, [conversation, room]);
+
+
+
+  if (!room) return <p>Loading…</p>;
 
   return (
-    <div className='-mt-12'>
-      <h2 className='text-lg font-bold'>{DiscussionRoomData?.coachingOption}</h2>
-      <div className='mt-5 grid grid-cols-1 lg:grid-cols-3 gap-10'>
-        <div className='lg:col-span-2'>
-          <div className='h-[60vh] bg-secondary rounded-4xl flex flex-col justify-center items-center relative'>
+    <div className="min-h-screen px-6 py-6 bg-gradient-to-br from-gray-50 to-gray-100">
+      <h2 className="text-2xl font-bold text-center mb-6">
+        {room.coachingOption}
+      </h2>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* 🎙 INTERVIEW PANEL */}
+        <div className="lg:col-span-2 bg-white rounded-3xl shadow-xl p-6 space-y-6">
+          {/* 👤 Expert */}
+          <div className="flex items-center gap-4">
             <Image
-              src={expert?.avatar || '/placeholder.png'}
-              alt='Avatar'
-              width={200}
-              height={200}
-              className='h-[80px] w-[80px] rounded-full object-cover animate-pulse'
+              src={expert?.avatar || "/placeholder.jpg"}
+              alt="Avatar"
+              width={80}
+              height={80}
+              className="rounded-full border-4 border-gray-300"
             />
-            <h2 className='text-gray-500'>{expert?.name || 'Unknown Expert'}</h2>
-
-            {audioUrl && <audio src={audioUrl} type='audio/mp3' autoPlay />}
-
-            <div className='p-5 bg-gray-200 px-10 rounded-lg absolute bottom-10 right-10'>
-              <UserButton />
+            <div>
+              <h2 className="text-lg font-semibold">{expert?.name}</h2>
+              <p className="text-sm text-gray-500">
+                {micOn ? "Listening..." : "Mic Off"}
+              </p>
             </div>
           </div>
 
-          <div className='mt-5 flex justify-center items-center cursor-pointer'>
-            {!enableMic ? (
-              <Button onClick={connectToServer} disabled={loading}>
-                {loading && <Loader2Icon className='animate-spin' />} Connect
+          {/* 🎥 VIDEO BOX */}
+          <div className="relative w-full h-[260px] bg-black rounded-xl overflow-hidden flex items-center justify-center">
+  <video
+    ref={videoRef}
+    autoPlay
+    muted
+    playsInline
+    className={`w-full h-full object-cover ${
+      cameraOn ? "block" : "hidden"
+    }`}
+  />
+
+  {!cameraOn && (
+    <VideoOff className="text-white w-16 h-16 opacity-70" />
+  )}
+
+  <Button
+    onClick={toggleCamera}
+    className="absolute top-3 right-3"
+    size="sm"
+    variant={cameraOn ? "destructive" : "secondary"}
+  >
+    {cameraOn ? <VideoOff /> : <Video />}
+  </Button>
+</div>
+
+          
+
+          {/* 📝 TRANSCRIPT */}
+          <div className="bg-gray-100 rounded-xl px-4 py-3 text-center italic text-gray-700">
+            {transcript || "Start speaking to see live transcription..."}
+          </div>
+
+          {/* 🎧 AI AUDIO */}
+          {audioUrl && <audio src={audioUrl} autoPlay />}
+
+          {/* 🎛 CONTROLS */}
+          <div className="flex justify-center gap-4">
+            {!micOn ? (
+              <Button onClick={connect} disabled={loading} size="lg">
+                {loading ? (
+                  <Loader2Icon className="animate-spin mr-2" />
+                ) : (
+                  <Mic className="mr-2" />
+                )}
+                Connect
               </Button>
             ) : (
-              <Button variant='destructive' onClick={disconnect} disabled={loading}>
-                {loading && <Loader2Icon className='animate-spin' />} Disconnect
+              <Button variant="destructive" onClick={disconnect} size="lg">
+                <MicOff className="mr-2" />
+                Disconnect
               </Button>
             )}
           </div>
         </div>
 
-        <div>
-          <ChatBox
-            conversation={conversation}
-            enableFeedbackNotes={enableFeedbackNotes}
-            coachingOption={DiscussionRoomData?.coachingOption}
-          />
-        </div>
-      </div>
-
-      <div>
-        <h2>{transcribe}</h2>
+        {/* 💬 CHAT */}
+        <ChatBox
+          conversation={conversation}
+          enableFeedbackNotes={enableFeedbackNotes}
+          coachingOption={room.coachingOption}
+        />
       </div>
     </div>
   );
-}
-
-export default DiscussionRoom;
+} 
 

@@ -37,7 +37,7 @@ function History() {
       <h2 className='font-bold text-xl'>Your Previous Lectures</h2>
       {discussionRoomList?.length==0&&<h2 className='text-gray-400'>You don't have any previous lectures</h2>}
       <div className='mt-5'>
-        {discussionRoomList.map((item, index)=> (item.coachingOption=='Topic Base Lecture'||item.coachingOption=='Learn Language'||item.coachingOption=='Meditation')&&
+        {discussionRoomList.map((item, index)=> (item.coachingOption=='Topic Base Lecture'||item.coachingOption=='Learn Language')&&
         (
           <div key={index} className='border-b-[1px] pb-3 mb-4 group flex justify-between items-center cursor-pointer'>
             <div className='flex gap-7 items-center'>

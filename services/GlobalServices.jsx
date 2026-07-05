@@ -1,82 +1,99 @@
-import axios from "axios"
-import OpenAI from "openai"
+import OpenAI from "openai";
 import { CoachingOptions } from "./Options";
 import { PollyClient, SynthesizeSpeechCommand } from "@aws-sdk/client-polly";
 
+/**
+ * ⚠️ TEMPORARY client-side AI (for live chat only)
+ * Move to server ASAP for production
+ */
 const openai = new OpenAI({
-    baseURL: "https://openrouter.ai/api/v1",
-    apiKey: process.env.NEXT_PUBLIC_AI_OPENROUTER,
-    dangerouslyAllowBrowser: true
-  })
+  baseURL: "https://openrouter.ai/api/v1",
+  apiKey: process.env.NEXT_PUBLIC_AI_OPENROUTER,
+  dangerouslyAllowBrowser: true,
+});
 
-export const getToken = async () => {
-    try {
-        const result = await axios.get('/api/getToken');
-        console.log("AssemblyAI token received:", result.data.token);  // <-- debug
-        return result.data;
-    } catch (err) {
-        console.error("Error fetching token:", err);
-        return { token: null };
-    }
-}
+// =====================
+// AI CHAT RESPONSE
+// =====================
+export const AIModel = async (topic, coachingOption, lastConversation = []) => {
+  const option = CoachingOptions.find(
+    (item) => item.name === coachingOption
+  );
 
-export const AIModel=async(topic,coachingOption,lastTwoConversation)=>{
+  if (!option) {
+    throw new Error("Invalid coaching option");
+  }
 
-    const option=CoachingOptions.find((item)=>item.name==coachingOption);
-    const PROMPT=(option.prompt).replace('{user_topic}',topic)
+  if (!topic || typeof topic !== "string") {
+    throw new Error("Invalid topic");
+  }
 
+  // ✅ Filter meaningful conversation
+  const meaningfulConversation = Array.isArray(lastConversation)
+    ? lastConversation.filter(
+        (c) => c?.role && c?.content && c.content.trim() !== ""
+      )
+    : [];
+
+  const PROMPT = option.prompt.replace("{user_topic}", topic);
+
+  try {
     const completion = await openai.chat.completions.create({
-        model: "deepseek/deepseek-chat-v3.1:free",
-        messages: [
-            {role:'assistant',content:PROMPT},
-            ...lastTwoConversation
-        ],
-      })
-      // console.log(completion.choices[0].message)
-      return completion?.choices[0].message;
-}
+      model: "openai/gpt-4o-mini",
+      messages: [
+        { role: "system", content: PROMPT },
+        ...meaningfulConversation,
+      ],
+      temperature: 0.7,
+    });
 
-export const AIModelToGenerateFeedbackAndNotes=async(coachingOption,conversation)=>{
+    const message =
+      completion?.choices?.[0]?.message;
 
-    const option=CoachingOptions.find((item)=>item.name==coachingOption);
-    const PROMPT=(option.summeryPrompt);
-
-    const completion = await openai.chat.completions.create({
-        model: "deepseek/deepseek-chat-v3.1:free",
-        messages: [
-            ...conversation,
-            {role:'assistant',content:PROMPT},
-        ],
-      })
-      // console.log(completion.choices[0].message)
-      return completion?.choices[0].message;
-}
-
-export const ConvertTextToSpeech=async(text,expertName)=>{
-    const pollyClient = new PollyClient({
-        region:'us-east-1',
-        credentials:{
-            accessKeyId:process.env.NEXT_PUBLIC_AWS_ACCESS_KEY_ID,
-            secretAccessKey:process.env.NEXT_PUBLIC_AWS_SECRET_KEY
-        }
-    })
-
-    const command = new SynthesizeSpeechCommand({
-        Text:text,
-        OutputFormat:'mp3',
-        VoiceId:expertName
-    })
-
-    try{
-        const {AudioStream}=await pollyClient.send(command);
-
-        const audioArrayBuffer = await AudioStream.transformToByteArray();
-        const audioBlob=new Blob([audioArrayBuffer],{type:'audio/mp3'})
-
-        const audioUrl=URL.createObjectURL(audioBlob);
-        return audioUrl
-    }catch(e)
-    {
-        console.log(e);
+    if (!message || !message.content) {
+      console.error("❌ Empty AI chat response:", completion);
+      throw new Error("AI failed to generate response");
     }
-}
+
+    return message;
+
+  } catch (err) {
+    console.error("❌ AIModel error:", err);
+    throw err;
+  }
+};
+
+// =====================
+// TEXT → SPEECH (AWS Polly)
+// =====================
+export const ConvertTextToSpeech = async (text, expertName) => {
+  if (!text || !expertName) {
+    throw new Error("Text or voice is missing");
+  }
+
+  const pollyClient = new PollyClient({
+    region: "us-east-1",
+    credentials: {
+      accessKeyId: process.env.NEXT_PUBLIC_AWS_ACCESS_KEY_ID,
+      secretAccessKey: process.env.NEXT_PUBLIC_AWS_SECRET_KEY,
+    },
+  });
+
+  const command = new SynthesizeSpeechCommand({
+    Text: text,
+    OutputFormat: "mp3",
+    VoiceId: expertName,
+  });
+
+  try {
+    const { AudioStream } = await pollyClient.send(command);
+    const audioArrayBuffer = await AudioStream.transformToByteArray();
+    const audioBlob = new Blob([audioArrayBuffer], { type: "audio/mp3" });
+    return URL.createObjectURL(audioBlob);
+  } catch (e) {
+    console.error("❌ Polly error:", e);
+    throw new Error("Text to speech failed");
+  }
+};
+
+
