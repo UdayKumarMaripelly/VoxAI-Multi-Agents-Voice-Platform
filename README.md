@@ -169,37 +169,37 @@ Feedback --> Frontend
 
 ## 🏠 Landing Page
 
-<img src="public/screenshots/EntryPage-1.png" width="100%"/>
+<img src="screenshots/EntryPage-1.png" width="100%"/>
 
 ---
 
 ## 📊 Dashboard
 
-<img src="public/screenshots/dashboard.png" width="100%"/>
+<img src="screenshots/dashboard.png" width="100%"/>
 
 ---
 
 ## 🎤 Mock Interview
 
-<img src="public/screenshots/mock-interview.png" width="100%"/>
+<img src="screenshots/mock-interview.png" width="100%"/>
 
 ---
 
 ## 🎥 Interview Interface
 
-<img src="public/screenshots/mock-interview-interface.png" width="100%"/>
+<img src="screenshots/mock-interview-interface.png" width="100%"/>
 
 ---
 
 ## 📝 AI Feedback
 
-<img src="public/screenshots/feedback.png" width="100%"/>
+<img src="screenshots/feedback.png" width="100%"/>
 
 ---
 
 ## 📈 Conversation Summary
 
-<img src="public/screenshots/summary.png" width="100%"/>
+<img src="screenshots/summary.png" width="100%"/>
 
 ---
 
